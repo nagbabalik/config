@@ -10,8 +10,8 @@ SCRIPT_PATH=$(realpath "$0")
 rm -rf "$SCRIPT_PATH"
 clear
 echo -e "\n\e[38;5;208m ★ \e[1;38;5;231mJuanScript AIO\e[38;5;208m ★ \e[0m\n"
-export ACCESS="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"
-export LINK="nagbabalik/slowdns/main/JuanScript"
+export ACCESS="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"
+export LINK="nagbabalik/config/main/JuanScript"
 API_ENDPOINT="https://api.cloudflare.com/client/v4/zones"
 AUTH_EMAIL="mjtsystem@gmail.com"
 AUTH_KEY="de5980c90bae868d16fdd0001d7674bff8a7b"
