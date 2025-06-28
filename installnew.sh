@@ -2,14 +2,14 @@
 #Script Variables
 apt update
 apt install sudo
-HOST='localhost:80';
+HOST='http://server.ap.loclx.io/phpmyadmin/';
 USER='root';
 PASS='';
-DBNAME='u844717466_bsbtechnology';
+DBNAME='server';
 PORT_TCP='1194';
 PORT_UDP='110';
 PORT_SSL='443';
-API_LINK='http://localhost/authentication/premium';
+API_LINK='https://server.ap.loclx.io/dashboard/ISMAEL/api-tigercorevpn.space/api';
 API_KEY='YModified';
 
 
