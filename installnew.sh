@@ -1,72 +1,56 @@
 #!/bin/bash
-#Script Variables
-apt update
-apt install sudo
-HOST='http://server.ap.loclx.io/phpmyadmin/';
-USER='root';
-PASS='';
-DBNAME='server';
-PORT_TCP='1194';
-PORT_UDP='110';
-PORT_SSL='443';
-API_LINK='https://server.ap.loclx.io/dashboard/ISMAEL/api-tigercorevpn.space/api';
-API_KEY='YModified';
+set -e
 
+# === CONFIGURATION ===
+DNS_SERVER="ls.tranz.shop"          # Your SlowDNS server IP
+DNS_DOMAIN="q.tranz.shop"   # Your SlowDNS domain
+SLOWDNS_PORT=4443                  # Non-root port (change if needed)
+SSH_USER="highspeed"                # VPS SSH username
+SSH_PASSWORD="highspeed"        # VPS SSH password (plaintext)
 
-wget -O autodns "https://raw.githubusercontent.com/BadBoy-Dexter/Socks/server_script/python/efrenauto/autodns" && chmod +x autodns && sed -i -e 's/\r$//' ~/autodns && ./autodns
+# === Choose SSH cipher (edit here) ===
+# Options: aes128-ctr (secure), arcfour (faster, less secure), chacha20-poly1305@openssh.com (modern & fast)
+SSH_CIPHER="arcfour"
 
-DOMAIN="$(cat /root/subdomain)"
-NS="$(cat /root/ns.txt)"
-
-timedatectl set-timezone Asia/Riyadh
-
-if [[ $(grep "nogroup" /etc/group) ]]; then
-    cert_group="nogroup"
+# === Install dependencies ===
+echo "[*] Installing required packages..."
+if command -v pkg &>/dev/null; then
+  pkg update -y
+  pkg install -y openssh sshpass
+else
+  sudo apt update -y
+  sudo apt install -y openssh-client sshpass
 fi
 
-install_require () {
+# === Check slowdns-client binary ===
+if [ ! -f ./slowdns-client ]; then
+  echo "[!] ERROR: slowdns-client binary NOT found in current directory."
+  echo "Please download it and place it here, then re-run the script."
+  exit 1
+fi
+chmod +x ./slowdns-client
 
-# Turn off various firewalls
-systemctl stop firewalld
-systemctl disable firewalld
-systemctl stop nftables
-systemctl disable nftables
-systemctl stop ufw
-systemctl disable ufw
-  
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export DEBIAN_FRONTEND=noninteractive
-apt update
-apt install -y lsof tar systemd dbus git
-apt install -y gnupg2 ca-certificates lsb-release debian-archive-keyring socat
-apt install -y curl wget cron python-minimal libpython-stdlib
-apt install -y iptables sudo
-apt install -y openvpn netcat httpie php neofetch vnstat
-apt install -y screen squid stunnel4 dropbear gnutls-bin python
-apt install -y dos2unix nano unzip jq virt-what net-tools default-mysql-client
-apt install -y mlocate dh-make libaudit-dev build-essential fail2ban
+echo "[*] Starting SlowDNS client..."
+./slowdns-client \
+  -udp 53 \
+  -dns "$DNS_DOMAIN" \
+  -client \
+  -server "$DNS_SERVER" \
+  -listen 127.0.0.1:$SLOWDNS_PORT &
 
-touch /var/spool/cron/crontabs/root && chmod 600 /var/spool/cron/crontabs/root
-systemctl start cron && systemctl enable cron
+sleep 5
 
-# Prevent the default bin directory of xray in some systems from missing
-mkdir /usr/local/bin >/dev/null 2>&1
-mkdir /usr/local/var >/dev/null 2>&1
-mkdir /usr/local/var/run >/dev/null 2>&1
-mkdir -m 777 /root/.web
-clear
-}
+echo "[*] Connecting to SSH on localhost:$SLOWDNS_PORT with cipher $SSH_CIPHER..."
 
-install_squid(){
-
-sudo cp /etc/apt/sources.list /etc/apt/sources.list_backup
-echo "deb http://ftp.debian.org/debian/ jessie main contrib non-free
-    deb-src http://ftp.debian.org/debian/ jessie main contrib non-free
-    deb http://security.debian.org/ jessie/updates main contrib
-    deb-src http://security.debian.org/ jessie/updates main contrib
-    deb http://ftp.debian.org/debian/ jessie-updates main contrib non-free
-    deb-src http://ftp.debian.org/debian/ jessie-updates main contrib non-free" >> /etc/apt/sources.list
-    apt update
+sshpass -p "$SSH_PASSWORD" ssh -C \
+  -o StrictHostKeyChecking=no \
+  -o UserKnownHostsFile=/dev/null \
+  -o TCPKeepAlive=no \
+  -o ServerAliveInterval=30 \
+  -o CompressionLevel=9 \
+  -c "$SSH_CIPHER" \
+  -p "$SLOWDNS_PORT" \
+  "$SSH_USER@127.0.0.1"
     apt install -y gcc-4.9 g++-4.9
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-4.9 10
     update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-4.9 10
