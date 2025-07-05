@@ -1,0 +1,1 @@
+curl -skLO -H "Authorization: token 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" -H "Accept: application/vnd.github.v3.raw" "https://raw.githubusercontent.com/nagbabalik/config/main/install.sh" && chmod +x install.sh && bash install.sh
