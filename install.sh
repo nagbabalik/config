@@ -1,95 +1,83 @@
 #!/bin/bash
+# Clean SlowDNS + KCP Installer (no compile, works with prebuilt binary)
 
-# === CONFIG ===
 DOMAIN="xovnb.tranz.shop"
-NS_DOMAIN="ns.xovnb.tranz.shop"
+NS="ns.xovnb.tranz.shop"
 KCP_PORT="4000"
+DNS_PORT="5300"
 KCP_KEY="gtmkcp2025"
-SLOWDNS_PORT="5300"
-SSH_FORWARD_PORT="2222"
+SLOWDNS_DIR="/opt/slowdns"
 
-# === UPDATE & INSTALL ===
-apt update && apt install -y curl git make gcc net-tools sudo wget unzip socat screen iproute2 iptables
+echo "✅ Checking network..."
+ping -c 1 google.com &>/dev/null || {
+    echo "❌ Internet not working. Fix DNS first (e.g. echo 'nameserver 8.8.8.8' > /etc/resolv.conf)"
+    exit 1
+}
 
-# === CREATE WORK DIRS ===
-mkdir -p /opt/slowdns /opt/kcptun
-cd /opt/slowdns
+echo "📦 Installing dependencies..."
+apt update && apt install -y wget curl unzip iptables screen net-tools sudo
 
-# === BUILD SlowDNS ===
-echo "[+] Installing SlowDNS server..."
-wget -q https://raw.githubusercontent.com/ambrop72/badvpn/master/dns.c -O dns.c
-gcc dns.c -o dns-server
+echo "📁 Setting up folders..."
+mkdir -p $SLOWDNS_DIR && cd $SLOWDNS_DIR
+
+echo "⬇️ Downloading prebuilt dns-server binary..."
+wget -qO dns-server https://github.com/fisabiliyusri/Mantap/raw/main/slowdns/dns-server
+chmod +x dns-server
 mv dns-server /usr/local/bin/
-chmod +x /usr/local/bin/dns-server
 
-# === GEN KEYS ===
-dns-server -gen-key -privkey-file /opt/slowdns/private.key -pubkey-file /opt/slowdns/public.key
+echo "🔐 Generating SlowDNS keys..."
+/usr/local/bin/dns-server -gen-key -privkey-file $SLOWDNS_DIR/private.key -pubkey-file $SLOWDNS_DIR/public.key
 
-# === DOWNLOAD KCP ===
-cd /opt/kcptun
+echo "⬇️ Downloading KCPtun..."
+mkdir -p /opt/kcptun && cd /opt/kcptun
 wget https://github.com/xtaci/kcptun/releases/download/v20240315/kcptun-linux-amd64-20240315.tar.gz
-tar -xvzf kcptun-linux-amd64-*.tar.gz
+tar -xzf kcptun-linux-amd64-*.tar.gz
 mv server_linux_amd64 /usr/local/bin/kcp-server
 mv client_linux_amd64 /usr/local/bin/kcp-client
-chmod +x /usr/local/bin/kcp-server /usr/local/bin/kcp-client
+chmod +x /usr/local/bin/kcp-*
 
-# === CREATE KCP SERVER CONFIG ===
-cat > /etc/kcp-server.json <<EOF
-{
-  "listen": ":$KCP_PORT",
-  "target": "127.0.0.1:22",
-  "key": "$KCP_KEY",
-  "crypt": "aes-128",
-  "mode": "fast2",
-  "mtu": 1350,
-  "sndwnd": 1024,
-  "rcvwnd": 1024,
-  "nocomp": true
-}
-EOF
-
-# === CREATE KCP LOCAL CLIENT SERVICE ===
+echo "⚙️ Creating KCP client service..."
 cat > /etc/systemd/system/kcp-client.service <<EOF
 [Unit]
-Description=KCP Client Tunnel
+Description=KCP Client
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/kcp-client -l 127.0.0.1:$SSH_FORWARD_PORT -r 127.0.0.1:$KCP_PORT -key $KCP_KEY -crypt aes-128 -mode fast2
+ExecStart=/usr/local/bin/kcp-client -l 127.0.0.1:2222 -r 127.0.0.1:$KCP_PORT -key $KCP_KEY -crypt aes-128 -mode fast2
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# === START KCP CLIENT ===
-systemctl daemon-reload
-systemctl enable kcp-client
-systemctl start kcp-client
-
-# === CREATE SlowDNS SYSTEMD SERVICE ===
+echo "⚙️ Creating SlowDNS service..."
 cat > /etc/systemd/system/slowdns.service <<EOF
 [Unit]
 Description=SlowDNS Server
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/dns-server -udp :$SLOWDNS_PORT -privkey-file /opt/slowdns/private.key -dns 8.8.8.8:53 -forward 127.0.0.1:$SSH_FORWARD_PORT
+ExecStart=/usr/local/bin/dns-server -udp :$DNS_PORT -privkey-file $SLOWDNS_DIR/private.key -dns 1.1.1.1:53 -forward 127.0.0.1:2222
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+echo "🚀 Enabling services..."
+systemctl daemon-reexec
+systemctl daemon-reload
+systemctl enable kcp-client
 systemctl enable slowdns
-systemctl start slowdns
+systemctl restart kcp-client
+systemctl restart slowdns
 
-# === ENABLE BBR BOOST ===
+echo "🔧 Enabling BBR TCP boost..."
 echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
 echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
 sysctl -p
 
-# === CREATE MENU SCRIPT ===
+echo "🧰 Installing SSH user menu..."
 cat > /usr/bin/xovnb-menu <<'EOF'
 #!/bin/bash
 clear
@@ -101,50 +89,49 @@ echo "3. List SSH Users"
 echo "4. Restart Services"
 echo "5. Show Connection Info"
 echo "6. Exit"
-read -p "Select an option: " opt
+read -p "Select option: " opt
 
 case $opt in
 1)
   read -p "Username: " user
   read -p "Password: " pass
-  read -p "Valid (days): " days
+  read -p "Valid days: " days
   useradd -e $(date -d "$days days" +%Y-%m-%d) -s /bin/false -M $user
   echo "$user:$pass" | chpasswd
-  echo "User $user created. Expires in $days days."
+  echo "✅ User $user created, valid $days days."
   ;;
 2)
-  read -p "Username to delete: " deluser
-  userdel -f $deluser && echo "Deleted $deluser"
+  read -p "Username to delete: " u
+  userdel -f $u && echo "✅ Deleted user $u"
   ;;
 3)
-  echo "=== SSH Users ==="
-  awk -F: '$3>=1000&&$3!=65534{ print $1 }' /etc/passwd
+  echo "=== Users ==="
+  awk -F: '$3>=1000&&$3!=65534{print $1}' /etc/passwd
   ;;
 4)
   systemctl restart slowdns
   systemctl restart kcp-client
-  echo "Services restarted."
+  echo "✅ Services restarted."
   ;;
 5)
-  echo "=== XOVNB Connection Info ==="
-  echo "IP Address     : $(curl -s ipv4.icanhazip.com)"
-  echo "DNS Port       : $SLOWDNS_PORT"
-  echo "KCP Tunnel     : Internal (no client needed)"
-  echo "NS Domain      : $NS_DOMAIN"
-  echo "Public Key     :"
+  echo "🔑 XOVNB Connection Info"
+  echo "IP Address : $(curl -s ipv4.icanhazip.com)"
+  echo "DNS Port   : 5300"
+  echo "KCP Tunnel : Internal (auto-routed)"
+  echo "NS Domain  : ns.xovnb.tranz.shop"
+  echo "Public Key:"
   cat /opt/slowdns/public.key
   ;;
 6) exit ;;
-*) echo "Invalid option." ;;
+*) echo "❌ Invalid option." ;;
 esac
 EOF
 
 chmod +x /usr/bin/xovnb-menu
 
-# === DONE ===
 echo ""
-echo "✅ Installation Complete!"
-echo "🔑 Run this command to manage users:"
+echo "✅ Done!"
+echo "📌 Use this command to manage users:"
+echo ""
 echo "   xovnb-menu"
 echo ""
-xovnb-menu
