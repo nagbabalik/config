@@ -1,95 +1,25 @@
 #!/bin/bash
-# Auto-Installer: SlowDNS + SSH (443) + ZIVPN KCP Tunnel Boost
+# SlowDNS + SSH (443) + KCP (ZIVPN) Installer with Static Key
+# Author: ChatGPT (Modified to include separate install/menu modes)
 
-# === Prompt Domain Config ===
-echo -n "Enter your main domain (e.g. trial.tranz.shop): "; read DOMAIN
-echo -n "Enter your NS domain (e.g. ns.trial.tranz.shop): "; read NS_DOMAIN
-
-# === System Prep ===
-echo "[+] Updating system..."
-apt update -y && apt upgrade -y
-apt install -y curl wget screen sudo dropbear git build-essential golang net-tools dnsutils unzip make cmake libssl-dev iptables cron whois
-
-# === Variables ===
+# === CONFIG ===
 SLOWDNS_DIR="/etc/slowdns"
 KCP_DIR="/opt/kcptun"
 ZIVPN_PORT=7000
 SSH_PORT=443
 BANNER_FILE="/etc/issue.net"
+PUB_KEY="c22a412517204a0540d00b03d4f8ecd806beb75922d965beb1172f1854763268"
+DOMAIN_FILE="/etc/slowdns/domain.conf"
 
-# === Create SlowDNS Keypair ===
-echo "[+] Setting up SlowDNS..."
-rm -rf $SLOWDNS_DIR && mkdir -p $SLOWDNS_DIR
-cd $SLOWDNS_DIR
-wget -qO sldns https://raw.githubusercontent.com/fisabiliyusri/SLDNS/main/slowdns/sldns-server
-chmod +x sldns
-
-# Generate keys safely
-if ./sldns keygen -privkey-file server.key -pubkey-file server.pub; then
-  echo "[+] SlowDNS keys generated."
-else
-  echo "[!] Failed to generate SlowDNS keys. Exiting."
-  exit 1
-fi
-
-# === Install SlowDNS Server Binary ===
-wget -qO sldns-server https://raw.githubusercontent.com/fisabiliyusri/SLDNS/main/slowdns/sldns-server
-wget -qO sldns-client https://raw.githubusercontent.com/fisabiliyusri/SLDNS/main/slowdns/sldns-client
-chmod +x sldns-server sldns-client
-
-# === SSH Server on Port 443 ===
-echo "[+] Configuring SSH on port $SSH_PORT..."
-echo "Port $SSH_PORT" >> /etc/ssh/sshd_config
-sed -i 's/#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-sed -i 's/#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-sed -i 's|#\?Banner.*|Banner /etc/issue.net|' /etc/ssh/sshd_config
-systemctl restart ssh || service ssh restart
-echo "Welcome to your private VPN server!" > $BANNER_FILE
-
-# === SlowDNS Systemd Service ===
-cat > /etc/systemd/system/slowdns-server.service << EOF
-[Unit]
-Description=SlowDNS Server
-After=network.target
-
-[Service]
-ExecStart=$SLOWDNS_DIR/sldns-server -udp :5300 -privkey-file $SLOWDNS_DIR/server.key $DOMAIN 127.0.0.1:$SSH_PORT
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable slowdns-server
-systemctl start slowdns-server
-
-# === ZIVPN / KCP Boost Setup ===
-echo "[+] Installing KCP server (ZIVPN-style)..."
-mkdir -p $KCP_DIR && cd $KCP_DIR
-wget -qO kcptun.tar.gz https://github.com/xtaci/kcptun/releases/download/v20240315/kcptun-linux-amd64-20240315.tar.gz
-tar -xzf kcptun.tar.gz && mv server_linux_amd64 kcp-server
-chmod +x kcp-server
-
-cat > /etc/systemd/system/kcp-server.service << EOF
-[Unit]
-Description=ZIVPN/KCP Tunnel Server
-After=network.target
-
-[Service]
-ExecStart=$KCP_DIR/kcp-server -t 127.0.0.1:$SSH_PORT -l :$ZIVPN_PORT -mode fast2 -nocomp -key zivpnboost
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable kcp-server
-systemctl start kcp-server
-
-# === Menu System ===
+# === MENU FUNCTION ===
 menu() {
+  if [ ! -f "$DOMAIN_FILE" ]; then
+    echo "[!] Configuration file not found. Please run installation first."
+    exit 1
+  fi
+
+  source "$DOMAIN_FILE"
+
   while true; do
     clear
     echo "========================="
@@ -129,7 +59,7 @@ menu() {
         ;;
       4)
         echo -e "\n[+] SlowDNS Public Key:"
-        cat $SLOWDNS_DIR/server.pub
+        echo "$PUB_KEY"
         ;;
       5)
         echo -e "\n[+] Server Info"
@@ -138,11 +68,14 @@ menu() {
         echo "SlowDNS Port: 5300"
         echo "SSH Port: $SSH_PORT"
         echo "ZIVPN UDP Port: $ZIVPN_PORT"
-        ip -4 addr show | grep inet | grep -v 127.0.0.1
+        ip -4 addr | grep inet | grep -v 127.0.0.1
         ;;
       6)
         echo -n "New Main Domain: "; read DOMAIN
         echo -n "New NS Domain: "; read NS_DOMAIN
+        echo "DOMAIN=\"$DOMAIN\"" > "$DOMAIN_FILE"
+        echo "NS_DOMAIN=\"$NS_DOMAIN\"" >> "$DOMAIN_FILE"
+        systemctl restart slowdns-server
         echo "Domain settings updated."
         ;;
       7)
@@ -165,18 +98,90 @@ menu() {
   done
 }
 
-# === Menu Launch Condition ===
+# === ENTRY POINT: MENU MODE ===
 if [[ "$1" == "menu" ]]; then
   menu
+  exit 0
 fi
 
-# === Done Message ===
+# === RUN INSTALLATION ===
+echo -n "Enter your main domain (e.g. trial.tranz.shop): "; read DOMAIN
+echo -n "Enter your NS domain (e.g. ns.trial.tranz.shop): "; read NS_DOMAIN
+
+mkdir -p "$SLOWDNS_DIR"
+echo "DOMAIN=\"$DOMAIN\"" > "$DOMAIN_FILE"
+echo "NS_DOMAIN=\"$NS_DOMAIN\"" >> "$DOMAIN_FILE"
+
+echo "[+] Updating system and installing dependencies..."
+apt update -y && apt upgrade -y
+apt install -y curl wget screen sudo dropbear git build-essential golang net-tools dnsutils unzip make cmake libssl-dev iptables cron whois
+
+echo "[+] Installing SlowDNS..."
+cd "$SLOWDNS_DIR"
+wget -qO sldns-server https://raw.githubusercontent.com/fisabiliyusri/SLDNS/main/slowdns/sldns-server
+wget -qO sldns-client https://raw.githubusercontent.com/fisabiliyusri/SLDNS/main/slowdns/sldns-client
+chmod +x sldns-server sldns-client
+echo "$PUB_KEY" > server.pub
+
+# SSH Config
+echo "[+] Configuring SSH on port $SSH_PORT..."
+echo "Port $SSH_PORT" >> /etc/ssh/sshd_config
+sed -i 's/#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sed -i 's/#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sed -i 's|#\?Banner.*|Banner /etc/issue.net|' /etc/ssh/sshd_config
+echo "Welcome to your private VPN server!" > $BANNER_FILE
+systemctl restart ssh || service ssh restart
+
+# SlowDNS Service
+cat > /etc/systemd/system/slowdns-server.service << EOF
+[Unit]
+Description=SlowDNS Server
+After=network.target
+
+[Service]
+ExecStart=$SLOWDNS_DIR/sldns-server -udp :5300 -pubkey $PUB_KEY $DOMAIN 127.0.0.1:$SSH_PORT
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable slowdns-server
+systemctl start slowdns-server
+
+# KCP Setup
+echo "[+] Installing KCP..."
+mkdir -p "$KCP_DIR"
+cd "$KCP_DIR"
+wget -qO kcptun.tar.gz https://github.com/xtaci/kcptun/releases/download/v20240315/kcptun-linux-amd64-20240315.tar.gz
+tar -xzf kcptun.tar.gz && mv server_linux_amd64 kcp-server
+chmod +x kcp-server
+
+cat > /etc/systemd/system/kcp-server.service << EOF
+[Unit]
+Description=ZIVPN/KCP Tunnel Server
+After=network.target
+
+[Service]
+ExecStart=$KCP_DIR/kcp-server -t 127.0.0.1:$SSH_PORT -l :$ZIVPN_PORT -mode fast2 -nocomp -key zivpnboost
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable kcp-server
+systemctl start kcp-server
+
+# Done
 echo -e "\n[✓] Installation Complete!"
 echo "NS Domain: $NS_DOMAIN"
 echo "Main Domain: $DOMAIN"
 echo "SlowDNS UDP Port: 5300"
 echo "SSH Port (Internal): $SSH_PORT"
 echo "ZIVPN UDP Port: $ZIVPN_PORT"
-echo "Run './install.sh menu' to manage users and settings"
+echo "Run './slowdns_zivpn_installer.sh menu' to manage users and settings"
 echo "SlowDNS Public Key:"
-cat $SLOWDNS_DIR/server.pub
+echo "$PUB_KEY"
