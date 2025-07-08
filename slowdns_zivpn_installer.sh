@@ -1,7 +1,5 @@
 #!/bin/bash
 # Auto-Installer: SlowDNS + SSH (443) + ZIVPN KCP Tunnel Boost
-# Editable NS and Domain Config
-# By ChatGPT
 
 # === Prompt Domain Config ===
 echo -n "Enter your main domain (e.g. trial.tranz.shop): "; read DOMAIN
@@ -20,28 +18,32 @@ SSH_PORT=443
 BANNER_FILE="/etc/issue.net"
 
 # === Create SlowDNS Keypair ===
-echo "[+] Generating SlowDNS keypair..."
+echo "[+] Setting up SlowDNS..."
 rm -rf $SLOWDNS_DIR && mkdir -p $SLOWDNS_DIR
 cd $SLOWDNS_DIR
 wget -qO sldns https://raw.githubusercontent.com/fisabiliyusri/SLDNS/main/slowdns/sldns-server
 chmod +x sldns
-./sldns keygen -privkey-file server.key -pubkey-file server.pub
+
+# Generate keys safely
+if ./sldns keygen -privkey-file server.key -pubkey-file server.pub; then
+  echo "[+] SlowDNS keys generated."
+else
+  echo "[!] Failed to generate SlowDNS keys. Exiting."
+  exit 1
+fi
 
 # === Install SlowDNS Server Binary ===
-echo "[+] Installing SlowDNS binaries..."
 wget -qO sldns-server https://raw.githubusercontent.com/fisabiliyusri/SLDNS/main/slowdns/sldns-server
 wget -qO sldns-client https://raw.githubusercontent.com/fisabiliyusri/SLDNS/main/slowdns/sldns-client
 chmod +x sldns-server sldns-client
 
 # === SSH Server on Port 443 ===
-echo "[+] Setting SSH to port $SSH_PORT..."
+echo "[+] Configuring SSH on port $SSH_PORT..."
 echo "Port $SSH_PORT" >> /etc/ssh/sshd_config
-sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-sed -i 's/#Banner.*/Banner \/etc\/issue.net/' /etc/ssh/sshd_config
+sed -i 's/#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sed -i 's/#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sed -i 's|#\?Banner.*|Banner /etc/issue.net|' /etc/ssh/sshd_config
 systemctl restart ssh || service ssh restart
-
-# Default SSH banner
 echo "Welcome to your private VPN server!" > $BANNER_FILE
 
 # === SlowDNS Systemd Service ===
@@ -58,7 +60,6 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reexec
 systemctl daemon-reload
 systemctl enable slowdns-server
 systemctl start slowdns-server
@@ -70,7 +71,6 @@ wget -qO kcptun.tar.gz https://github.com/xtaci/kcptun/releases/download/v202403
 tar -xzf kcptun.tar.gz && mv server_linux_amd64 kcp-server
 chmod +x kcp-server
 
-# KCP Config
 cat > /etc/systemd/system/kcp-server.service << EOF
 [Unit]
 Description=ZIVPN/KCP Tunnel Server
@@ -101,9 +101,9 @@ menu() {
     echo "4. Show SlowDNS Public Key"
     echo "5. Show Server Info"
     echo "6. Edit Domain/NS Settings"
+    echo "7. Uninstall All"
     echo "0. Exit"
-    echo -n "Select: "
-    read opt
+    echo -n "Select: "; read opt
     case $opt in
       1)
         echo -n "Username: "; read uname
@@ -138,12 +138,21 @@ menu() {
         echo "SlowDNS Port: 5300"
         echo "SSH Port: $SSH_PORT"
         echo "ZIVPN UDP Port: $ZIVPN_PORT"
-        ip -4 addr | grep inet
+        ip -4 addr show | grep inet | grep -v 127.0.0.1
         ;;
       6)
         echo -n "New Main Domain: "; read DOMAIN
         echo -n "New NS Domain: "; read NS_DOMAIN
         echo "Domain settings updated."
+        ;;
+      7)
+        echo "Uninstalling services..."
+        systemctl stop slowdns-server kcp-server
+        systemctl disable slowdns-server kcp-server
+        rm -f /etc/systemd/system/slowdns-server.service /etc/systemd/system/kcp-server.service
+        systemctl daemon-reload
+        rm -rf $SLOWDNS_DIR $KCP_DIR
+        echo "SlowDNS and KCP server removed."
         ;;
       0)
         exit 0
@@ -156,18 +165,18 @@ menu() {
   done
 }
 
-# Run menu by default if called directly
-if [[ "$0" == *menu* || "$1" == "menu" ]]; then
+# === Menu Launch Condition ===
+if [[ "$1" == "menu" ]]; then
   menu
 fi
 
-# === Done ===
+# === Done Message ===
 echo -e "\n[✓] Installation Complete!"
 echo "NS Domain: $NS_DOMAIN"
 echo "Main Domain: $DOMAIN"
 echo "SlowDNS UDP Port: 5300"
 echo "SSH Port (Internal): $SSH_PORT"
 echo "ZIVPN UDP Port: $ZIVPN_PORT"
-echo "Run './thisscript.sh menu' or simply 'menu' to manage users and settings"
+echo "Run './install.sh menu' to manage users and settings"
 echo "SlowDNS Public Key:"
 cat $SLOWDNS_DIR/server.pub
